@@ -1,0 +1,5 @@
+>>> salam вошёл в чат
+[Сервер]: salam bro
+[Сервер]: rfr ;bpy,
+salam: njgxbr ,hjk
+>>> salam покинул чат
