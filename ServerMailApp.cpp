@@ -19,23 +19,23 @@ using namespace std;
 const int PORT = 8080;
 const int BUF_SIZE = 8192;
 
-// Структура клиента
+// Client structure
 struct Client {
-    SOCKET  sock;
-    int     id;
-    string  name;
+    SOCKET sock;
+    int    id;
+    string name;
 };
 
 vector<Client> clients;
 mutex          clients_mutex;
 
-// ─── Сохранение истории ───────────────────────────────────────────────────────
+// ─── Save message to history file ────────────────────────────────────────────
 void save_history(const string& msg) {
     ofstream out("chat_history.txt", ios::app);
     out << msg << "\n";
 }
 
-// ─── Рассылка всем (кроме исключённого сокета, INVALID_SOCKET = всем) ─────────
+// ─── Broadcast to all clients (exclude one socket, INVALID_SOCKET = send to all) ─
 void broadcast(const string& msg, SOCKET exclude = INVALID_SOCKET) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients) {
@@ -44,12 +44,12 @@ void broadcast(const string& msg, SOCKET exclude = INVALID_SOCKET) {
     }
 }
 
-// ─── Отправка одному клиенту ──────────────────────────────────────────────────
+// ─── Send to a single client ─────────────────────────────────────────────────
 void send_to(SOCKET sock, const string& msg) {
     send(sock, msg.c_str(), (int)msg.size(), 0);
 }
 
-// ─── Найти имя клиента по сокету ─────────────────────────────────────────────
+// ─── Get client name by socket ───────────────────────────────────────────────
 string get_name(SOCKET sock) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients)
@@ -57,14 +57,14 @@ string get_name(SOCKET sock) {
     return "Unknown";
 }
 
-// ─── Задать имя клиента ───────────────────────────────────────────────────────
+// ─── Set client name by socket ───────────────────────────────────────────────
 void set_name(SOCKET sock, const string& name) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients)
         if (c.sock == sock) { c.name = name; return; }
 }
 
-// ─── Подсчёт пробелов ────────────────────────────────────────────────────────
+// ─── Count spaces in a file ──────────────────────────────────────────────────
 int count_spaces(const string& filename) {
     ifstream file(filename, ios::binary);
     if (!file.is_open()) return -1;
@@ -75,12 +75,11 @@ int count_spaces(const string& filename) {
     return count;
 }
 
-// ─── Обработка одного клиента ────────────────────────────────────────────────
+// ─── Handle a single client ──────────────────────────────────────────────────
 void handle_client(SOCKET client_sock, int client_id) {
     char   buffer[BUF_SIZE];
-    string client_name = "Client" + to_string(client_id);   // имя до set_name
+    string client_name = "Client" + to_string(client_id); // default until set_name
 
-    // Ждём set_name или начинаем без имени
     while (true) {
         int bytes = recv(client_sock, buffer, BUF_SIZE - 1, 0);
         if (bytes <= 0) goto disconnect;
@@ -91,7 +90,7 @@ void handle_client(SOCKET client_sock, int client_id) {
         string action;
         ss >> action;
 
-        // ── Смена имени ──────────────────────────────────────────────────────
+        // ── Set username ─────────────────────────────────────────────────────
         if (action == "set_name") {
             string new_name;
             getline(ss, new_name);
@@ -101,15 +100,14 @@ void handle_client(SOCKET client_sock, int client_id) {
                 client_name = new_name;
                 set_name(client_sock, client_name);
             }
-            // Уведомление для всех
-            string join_msg = ">>> " + client_name + " вошёл в чат";
+            string join_msg = ">>> " + client_name + " joined the chat";
             cout << join_msg << "\n";
             save_history(join_msg);
-            broadcast(join_msg);                // включая самого вошедшего
+            broadcast(join_msg); // including the sender
             continue;
         }
 
-        // ── Обычное сообщение ────────────────────────────────────────────────
+        // ── Regular message ──────────────────────────────────────────────────
         if (action == "msg" || action == "broadcast") {
             string text;
             getline(ss, text);
@@ -119,28 +117,24 @@ void handle_client(SOCKET client_sock, int client_id) {
             cout << full << "\n";
             save_history(full);
 
-            // Рассылаем ВСЕМ (включая отправителя — он уже показал локально,
-            // но другие клиенты должны видеть; отправитель получит подтверждение)
-            // Если не хотите дублировать у отправителя, замените INVALID_SOCKET
-            // на client_sock в строке ниже.
-            broadcast(full, client_sock);  // всем, кроме отправителя (он эхо показал сам)
+            // Send to all except sender (sender already echoed locally)
+            // To echo back to sender too, replace client_sock with INVALID_SOCKET
+            broadcast(full, client_sock);
             continue;
         }
 
-        // ── Приём файла ──────────────────────────────────────────────────────
+        // ── Receive file ─────────────────────────────────────────────────────
         if (action == "send_file") {
             string filename, size_str;
             ss >> filename >> size_str;
             long long fsize = stoll(size_str);
 
-            // Остаток заголовка в буфере после \n — это уже начало файла
-            // Найдём позицию конца заголовка
+            // Find end of header line — rest of buffer is file body
             size_t nl = raw.find('\n');
             long long received = 0;
 
             ofstream out_file("server_files/" + filename, ios::binary);
 
-            // Если часть тела файла уже в буфере
             if (nl != string::npos && nl + 1 < raw.size()) {
                 size_t body_start = nl + 1;
                 size_t body_len = raw.size() - body_start;
@@ -148,7 +142,6 @@ void handle_client(SOCKET client_sock, int client_id) {
                 received += body_len;
             }
 
-            // Читаем остаток
             while (received < fsize) {
                 int r = recv(client_sock, buffer,
                     (int)min((long long)BUF_SIZE, fsize - received), 0);
@@ -158,19 +151,19 @@ void handle_client(SOCKET client_sock, int client_id) {
             }
             out_file.close();
 
-            string resp = "[Файл '" + filename + "' сохранён на сервере]\n";
+            string resp = "[File '" + filename + "' saved on server]\n";
             send_to(client_sock, resp);
-            cout << "Получен файл '" << filename << "' от " << client_name << "\n";
+            cout << "Received file '" << filename << "' from " << client_name << "\n";
             continue;
         }
 
-        // ── Отдача файла клиенту ─────────────────────────────────────────────
+        // ── Send file to client ──────────────────────────────────────────────
         if (action == "get_file") {
             string filename;
             ss >> filename;
             ifstream in_file("server_files/" + filename, ios::binary | ios::ate);
             if (!in_file.is_open()) {
-                send_to(client_sock, "ERROR: Файл не найден\n");
+                send_to(client_sock, "ERROR: File not found\n");
                 continue;
             }
             long long fsize = in_file.tellg();
@@ -189,22 +182,21 @@ void handle_client(SOCKET client_sock, int client_id) {
             continue;
         }
 
-        // ── Подсчёт пробелов ─────────────────────────────────────────────────
+        // ── Count spaces ─────────────────────────────────────────────────────
         if (action == "count_spaces") {
             string filename;
             ss >> filename;
             int spaces = count_spaces("server_files/" + filename);
             string resp = (spaces >= 0)
-                ? "SPACES в '" + filename + "': " + to_string(spaces) + "\n"
-                : "ERROR: Не удаётся открыть файл\n";
+                ? "SPACES in '" + filename + "': " + to_string(spaces) + "\n"
+                : "ERROR: Cannot open file\n";
             send_to(client_sock, resp);
             continue;
         }
     }
 
 disconnect:
-    // Уведомляем всех об уходе
-    string leave_msg = ">>> " + client_name + " покинул чат";
+    string leave_msg = ">>> " + client_name + " left the chat";
     cout << leave_msg << "\n";
     save_history(leave_msg);
     {
@@ -218,37 +210,34 @@ disconnect:
     closesocket(client_sock);
 }
 
-// ─── Поток ввода сообщений от имени сервера ───────────────────────────────────
+// ─── Server console input — lets the server send messages to all clients ─────
 void server_input_loop() {
     string line;
     while (getline(cin, line)) {
         if (line.empty()) continue;
-        string msg = "[Сервер]: " + line;
+        string msg = "[Server]: " + line;
         cout << msg << "\n";
         save_history(msg);
         broadcast(msg);
     }
 }
 
-// ─── Точка входа ─────────────────────────────────────────────────────────────
+// ─── Entry point ─────────────────────────────────────────────────────────────
 int main() {
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        cout << "Ошибка инициализации Winsock!\n";
+        cout << "Winsock initialization error!\n";
         return 1;
     }
 
     SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock == INVALID_SOCKET) {
-        cout << "Ошибка создания сокета!\n";
+        cout << "Socket creation error!\n";
         WSACleanup();
         return 1;
     }
 
-    // Разрешить повторное использование порта
+    // Allow port reuse after restart
     int opt = 1;
     setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
@@ -258,7 +247,7 @@ int main() {
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
-        cout << "Ошибка bind: " << WSAGetLastError() << "\n";
+        cout << "Bind error: " << WSAGetLastError() << "\n";
         closesocket(server_sock);
         WSACleanup();
         return 1;
@@ -267,10 +256,10 @@ int main() {
     listen(server_sock, SOMAXCONN);
     filesystem::create_directory("server_files");
 
-    cout << "=== Сервер запущен на порту " << PORT << " ===\n";
-    cout << "Введите сообщение и нажмите Enter, чтобы написать всем клиентам.\n\n";
+    cout << "=== Server started on port " << PORT << " ===\n";
+    cout << "Type a message and press Enter to broadcast to all clients.\n\n";
 
-    // Поток для ввода сообщений сервером
+    // Thread for server-side console input
     thread(server_input_loop).detach();
 
     int client_id = 0;
@@ -283,7 +272,7 @@ int main() {
             clients.push_back({ client, ++client_id, "Client" + to_string(client_id) });
         }
 
-        cout << "[Новое подключение] Client" << client_id << "\n";
+        cout << "[New connection] Client" << client_id << "\n";
         thread(handle_client, client, client_id).detach();
     }
 
