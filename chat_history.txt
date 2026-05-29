@@ -9,3 +9,13 @@ j3rzy: Hello bro
 j3rzy: все топчик
 [Server]: чиназис
 >>> j3rzy left the chat
+[Server]: салам
+[Server]: але
+[Server]: ответь
+[Server]: че нибудь
+[Server]: йоу
+[Server]: че за х
+[Server]: бля
+[Server]: ау
+[Server]: щшатвшщывм
+>>> Client1 left the chat
