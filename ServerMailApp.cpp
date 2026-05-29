@@ -19,6 +19,7 @@ using namespace std;
 const int PORT = 8080;
 const int BUF_SIZE = 8192;
 
+// Client structure
 struct Client {
     SOCKET sock;
     int    id;
@@ -28,11 +29,13 @@ struct Client {
 vector<Client> clients;
 mutex          clients_mutex;
 
+// ─── Save message to history file ────────────────────────────────────────────
 void save_history(const string& msg) {
     ofstream out("chat_history.txt", ios::app);
     out << msg << "\n";
 }
 
+// ─── Broadcast to all clients (exclude one socket, INVALID_SOCKET = send to all) ─
 void broadcast(const string& msg, SOCKET exclude = INVALID_SOCKET) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients) {
@@ -41,10 +44,12 @@ void broadcast(const string& msg, SOCKET exclude = INVALID_SOCKET) {
     }
 }
 
+// ─── Send to a single client ─────────────────────────────────────────────────
 void send_to(SOCKET sock, const string& msg) {
     send(sock, msg.c_str(), (int)msg.size(), 0);
 }
 
+// ─── Get client name by socket ───────────────────────────────────────────────
 string get_name(SOCKET sock) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients)
@@ -52,12 +57,14 @@ string get_name(SOCKET sock) {
     return "Unknown";
 }
 
+// ─── Set client name by socket ───────────────────────────────────────────────
 void set_name(SOCKET sock, const string& name) {
     lock_guard<mutex> lock(clients_mutex);
     for (auto& c : clients)
         if (c.sock == sock) { c.name = name; return; }
 }
 
+// ─── Count spaces in a file ──────────────────────────────────────────────────
 int count_spaces(const string& filename) {
     ifstream file(filename, ios::binary);
     if (!file.is_open()) return -1;
@@ -68,9 +75,10 @@ int count_spaces(const string& filename) {
     return count;
 }
 
+// ─── Handle a single client ──────────────────────────────────────────────────
 void handle_client(SOCKET client_sock, int client_id) {
     char   buffer[BUF_SIZE];
-    string client_name = "Client" + to_string(client_id);
+    string client_name = "Client" + to_string(client_id); // default until set_name
 
     while (true) {
         int bytes = recv(client_sock, buffer, BUF_SIZE - 1, 0);
@@ -82,6 +90,7 @@ void handle_client(SOCKET client_sock, int client_id) {
         string action;
         ss >> action;
 
+        // ── Set username ─────────────────────────────────────────────────────
         if (action == "set_name") {
             string new_name;
             getline(ss, new_name);
@@ -94,10 +103,11 @@ void handle_client(SOCKET client_sock, int client_id) {
             string join_msg = ">>> " + client_name + " joined the chat";
             cout << join_msg << "\n";
             save_history(join_msg);
-            broadcast(join_msg);
+            broadcast(join_msg); // including the sender
             continue;
         }
 
+        // ── Regular message ──────────────────────────────────────────────────
         if (action == "msg" || action == "broadcast") {
             string text;
             getline(ss, text);
@@ -107,15 +117,19 @@ void handle_client(SOCKET client_sock, int client_id) {
             cout << full << "\n";
             save_history(full);
 
+            // Send to all except sender (sender already echoed locally)
+            // To echo back to sender too, replace client_sock with INVALID_SOCKET
             broadcast(full, client_sock);
             continue;
         }
 
+        // ── Receive file ─────────────────────────────────────────────────────
         if (action == "send_file") {
             string filename, size_str;
             ss >> filename >> size_str;
             long long fsize = stoll(size_str);
 
+            // Find end of header line — rest of buffer is file body
             size_t nl = raw.find('\n');
             long long received = 0;
 
@@ -143,6 +157,7 @@ void handle_client(SOCKET client_sock, int client_id) {
             continue;
         }
 
+        // ── Send file to client ──────────────────────────────────────────────
         if (action == "get_file") {
             string filename;
             ss >> filename;
@@ -167,6 +182,7 @@ void handle_client(SOCKET client_sock, int client_id) {
             continue;
         }
 
+        // ── Count spaces ─────────────────────────────────────────────────────
         if (action == "count_spaces") {
             string filename;
             ss >> filename;
@@ -194,6 +210,7 @@ disconnect:
     closesocket(client_sock);
 }
 
+// ─── Server console input — lets the server send messages to all clients ─────
 void server_input_loop() {
     string line;
     while (getline(cin, line)) {
@@ -205,6 +222,51 @@ void server_input_loop() {
     }
 }
 
+// ─── Print all local IPv4 addresses ──────────────────────────────────────────
+void print_local_ips() {
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0) return;
+
+    addrinfo hints{}, * res = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (getaddrinfo(hostname, nullptr, &hints, &res) != 0) return;
+
+    cout << "  Your IP addresses (share one of these with the other PC):\n";
+    for (addrinfo* p = res; p != nullptr; p = p->ai_next) {
+        char ip[INET_ADDRSTRLEN];
+        sockaddr_in* sa = (sockaddr_in*)p->ai_addr;
+        inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip));
+        // Skip loopback
+        if (string(ip) != "127.0.0.1")
+            cout << "    --> " << ip << "\n";
+    }
+    freeaddrinfo(res);
+    cout << "  (Use 127.0.0.1 only if both programs are on the same PC)\n\n";
+}
+
+// ─── Open port in Windows Firewall (requires admin rights) ───────────────────
+void open_firewall_port() {
+    string rule_check = "netsh advfirewall firewall show rule name=\"ChatServer_" +
+        to_string(PORT) + "\" > nul 2>&1";
+    if (system(rule_check.c_str()) == 0) return; // rule already exists
+
+    string cmd = "netsh advfirewall firewall add rule "
+        "name=\"ChatServer_" + to_string(PORT) + "\" "
+        "protocol=TCP dir=in localport=" + to_string(PORT) +
+        " action=allow > nul 2>&1";
+
+    if (system(cmd.c_str()) == 0)
+        cout << "  [Firewall] Port " << PORT << " opened successfully.\n";
+    else
+        cout << "  [Firewall] Could not open port automatically.\n"
+        << "  Run as Administrator, or add the rule manually:\n"
+        << "    netsh advfirewall firewall add rule name=\"ChatServer\" "
+        << "protocol=TCP dir=in localport=" << PORT << " action=allow\n";
+}
+
+// ─── Entry point ─────────────────────────────────────────────────────────────
 int main() {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -219,6 +281,7 @@ int main() {
         return 1;
     }
 
+    // Allow port reuse after restart
     int opt = 1;
     setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
@@ -237,9 +300,12 @@ int main() {
     listen(server_sock, SOMAXCONN);
     filesystem::create_directory("server_files");
 
-    cout << "=== Server started on port " << PORT << " ===\n";
+    cout << "=== Server started on port " << PORT << " ===\n\n";
+    open_firewall_port();
+    print_local_ips();
     cout << "Type a message and press Enter to broadcast to all clients.\n\n";
 
+    // Thread for server-side console input
     thread(server_input_loop).detach();
 
     int client_id = 0;
